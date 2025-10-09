@@ -1,0 +1,65 @@
+{
+  "name": "tensorrt-ros2-dev",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "args": {
+      "ROS_DISTRO": "humble",
+      "TENSORRT_VERSION": "10.11.0.33-1+cuda12.9"
+    }
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+  "workspaceFolder": "/workspace",
+  "hostRequirements": {
+    "gpu": true
+  },
+  "containerUser": "root",
+  "remoteUser": "root",
+  "runArgs": [
+    "--name=rtdetrv2-tensorrt",
+    "--privileged",
+    "--env",
+    "DISPLAY=${env:DISPLAY}",
+    "--env",
+    "XAUTHORITY=/run/user/1000/gdm/Xauthority",
+    "--env",
+    "XDG_RUNTIME_DIR=/run/user/1000",
+    "--env",
+    "NVIDIA_DRIVER_CAPABILITIES=all",
+    "--cap-add=SYS_PTRACE",
+    "--security-opt",
+    "seccomp=unconfined",
+    "--net=host",
+    "--volume=/tmp/.X11-unix/:/tmp/.X11-unix",
+    "--volume=/etc/localtime:/etc/localtime:ro",
+    "--volume=/dev/dri:/dev/dri:ro",
+    "--volume=/home/jacoblambert/public_data/mapillary_vistas:/data/:ro",
+    "--volume=/home/jacoblambert/autoware_rosbags:/rosbags/:ro",
+    "--gpus",
+    "all",
+    "--shm-size=64gb",
+    "--ipc=host",
+    "--ulimit",
+    "memlock=-1",
+    "--ulimit",
+    "stack=67108864"
+  ],
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      },
+      "extensions": [
+        "ms-python.python",
+        "ms-iot.vscode-ros",
+        "ms-vscode.cpptools",
+        "eamodio.gitlens",
+        "ms-azuretools.vscode-docker",
+        "redhat.vscode-yaml",
+        "yzhang.markdown-all-in-one",
+        "github.copilot",
+        "openai.chatgpt"
+      ]
+    }
+  },
+  "postCreateCommand": "source /opt/ros/humble/setup.bash"
+}

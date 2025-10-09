@@ -117,13 +117,13 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --master_port=9909 --nproc_per_node=4 tool
 <!-- <summary>4. Export onnx </summary> -->
 4. Export onnx
 ```shell
-python tools/export_onnx.py -c path/to/config -r path/to/checkpoint --check
+python tools/export_onnx.py -c path/to/config -r path/to/checkpoint.pth -o path/to/output/model.onnx --check
 ```
 
 <!-- <summary>5. Export tensorrt </summary> -->
 5. Export tensorrt
 ```shell
-python tools/export_trt.py -i path/to/onnxfile
+python tools/export_trt.py -i path/to/onnxfile -o path/to/output/model.engine
 ```
 
 <!-- <summary>6. Inference </summary> -->

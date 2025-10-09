@@ -1,0 +1,26 @@
+<launch>
+  <arg name="engine_path" default="/workspace/checkpoints/rtdetrv2_r18vd_120e_100q_autoware.engine" />
+  <arg name="label_map_name" default="autoware" />
+  <arg name="input_topic" default="/sensing/camera/camera0/image_raw/compressed" />
+  <arg name="objects_topic" default="/rtdetrv2/rois" />
+  <arg name="debug_image_topic" default="/rtdetrv2/debug/compressed" />
+  <arg name="rtdetrv2_node_name" default="rtdetrv2_tensorrt" />
+  <arg name="score_threshold" default="0.3" />
+  <arg name="debug_encoding" default="jpeg" />
+  <arg name="performance_logging" default="false" />
+  <arg name="debug_visualization" default="false" />
+
+  <arg name="use_sim_time" default="true"/>
+
+  <node pkg="rtdetrv2_tensorrt_node" exec="rtdetrv2_tensorrt_inference" name="$(var rtdetrv2_node_name)" output="screen">
+      <param name="engine_path" value="$(var engine_path)" />
+      <param name="input_topic" value="$(var input_topic)" />
+      <param name="objects_topic" value="$(var objects_topic)" />
+      <param name="debug_image_topic" value="$(var debug_image_topic)" />
+      <param name="score_threshold" value="$(var score_threshold)" />
+      <param name="debug_encoding" value="$(var debug_encoding)" />
+      <param name="label_map_name" value="$(var label_map_name)" />
+      <param name="performance_logging" value="$(var performance_logging)" />
+      <param name="debug_visualization" value="$(var debug_visualization)" />
+  </node>
+</launch>

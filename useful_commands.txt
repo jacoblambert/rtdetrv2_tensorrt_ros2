@@ -1,0 +1,10 @@
+// train
+
+// test
+python tools/train.py -c configs/rtdetrv2/rtdetrv2_r18vd_120e_100q_autoware.yml -r work_dirs/rtdetrv2_r18vd_120e_100q_autoware/best.pth --test-only
+
+// export to onnx
+ython tools/export_onnx.py -c configs/rtdetrv2/rtdetrv2_r18vd_120e_100q_autoware.yml -r /work_dirs/rtdetrv2_r18vd_120e_100q_autoware/checkpoint0038.pth -o checkpoints/onnx/rtdetrv2_r18vd_120e_100q_autoware.onnx --check
+
+// export to trt
+python tools/export_trt.py -i checkpoints/onnx/rtdetrv2_r18vd_120e_100q_autoware.onnx -o checkpoints/trt/rtdetrv2_r18vd_120e_100q_autoware.engine
