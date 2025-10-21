@@ -34,7 +34,7 @@ ros2 launch rtdetrv2_tensorrt_node rtdetrv2_tensorrt.launch.xml \
 
 Common label map presets:
 
-- `autoware` (default) – 8 driving-centric classes
+- `autoware` (default) – 8 driving-centric classes + traffic light and traffic sign (10 total)
 - `coco` – COCO-80 classes (unsupported classes map to `UNKNOWN`)
 - Any file path – plain-text label list (one label per line)
 

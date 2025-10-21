@@ -11,15 +11,15 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "rtdetrv2_tensorrt_node/label_map.hpp"
+#include "rtdetrv2_tensorrt_node/trt_rtdetrv2_engine.hpp"
 
 namespace rtdetrv2_tensorrt
 {
-
-class TrtRtdetrv2Engine;
 
 struct DebugDetection
 {
@@ -47,6 +47,9 @@ private:
   bool encodeAndPublish(const cv::Mat & image, const std_msgs::msg::Header & header);
   void configureEncodingParameters();
 
+  std::optional<TrtRtdetrv2Engine::InputSize> loadRequestedInputSize();
+  void updateInputGeometryFromEngine();
+
   std::unique_ptr<TrtRtdetrv2Engine> engine_;
   rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr image_sub_;
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr debug_image_pub_;
@@ -54,7 +57,8 @@ private:
 
   LabelMapProvider label_map_;
   std::vector<float> input_buffer_;
-  cv::Mat blob_buffer_;
+  cv::Mat resize_buffer_;
+  std::optional<TrtRtdetrv2Engine::InputSize> requested_input_size_;
   double score_threshold_{0.5};
   int input_width_{640};
   int input_height_{640};

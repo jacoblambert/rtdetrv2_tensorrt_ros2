@@ -116,7 +116,7 @@ uint8_t classificationFromLabel(const std::string & label)
 const std::vector<std::string> & autowarePreset()
 {
   static const std::vector<std::string> names = {
-    "car", "truck", "bus", "trailer", "motorcycle", "bicycle", "pedestrian", "animal"};
+    "car", "truck", "bus", "trailer", "motorcycle", "bicycle", "pedestrian", "animal", "traffic light", "traffic sign"};
   return names;
 }
 

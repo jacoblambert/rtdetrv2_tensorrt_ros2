@@ -1,6 +1,36 @@
 import os
 import argparse
+from typing import Optional, Tuple
+
+import onnx
 import tensorrt as trt
+
+
+def _extract_input_hw_from_onnx(onnx_path: str,
+                                input_name: str = "images") -> Optional[Tuple[int, int]]:
+    """Read the ONNX graph to recover the static spatial size of the main input."""
+    model = onnx.load(onnx_path)
+    try:
+        model = onnx.shape_inference.infer_shapes(model)
+    except Exception:
+        # Shape inference can fail when opset support is partial; fall back to raw graph.
+        pass
+
+    def _dim_value(dim):
+        return dim.dim_value if dim.HasField("dim_value") else None
+
+    for value_info in model.graph.input:
+        if value_info.name != input_name:
+            continue
+        tensor_type = value_info.type.tensor_type
+        shape = tensor_type.shape.dim
+        if len(shape) != 4:
+            break
+        h_val = _dim_value(shape[2])
+        w_val = _dim_value(shape[3])
+        if h_val is not None and w_val is not None:
+            return int(h_val), int(w_val)
+    return None
 
 
 def main(onnx_path,
@@ -8,6 +38,7 @@ def main(onnx_path,
          max_batchsize,
          opt_batchsize,
          min_batchsize,
+         input_size,
          use_fp16=True,
          verbose=False) -> None:
     """ Convert ONNX model to TensorRT engine.
@@ -40,7 +71,7 @@ def main(onnx_path,
     config = builder.create_builder_config()
     # config.set_preview_feature(trt.PreviewFeature.FASTER_DYNAMIC_SHAPES_0805, True) # deprecated in trt 10.0
     # config.max_workspace_size = 1 << 30  # 1GB # deprecated in trt 10.0
-    config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)
+    config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 8 << 30)
     if use_fp16:
         if builder.platform_has_fast_fp16:
             config.set_flag(trt.BuilderFlag.FP16)
@@ -50,12 +81,27 @@ def main(onnx_path,
                 "[WARNING] FP16 not supported on this platform. Proceeding with FP32."
             )
 
+    if input_size is None:
+        inferred_hw = _extract_input_hw_from_onnx(onnx_path)
+        if inferred_hw is None:
+            raise ValueError(
+                "Unable to infer input spatial size from ONNX. "
+                "Specify it explicitly via --inputSize."
+            )
+        input_hw = inferred_hw
+        print(f"[INFO] Detected input size from ONNX: {input_hw[0]}x{input_hw[1]}")
+    else:
+        input_hw = (input_size, input_size)
+
     profile = builder.create_optimization_profile()
     profile.set_shape("images",
-                      min=(min_batchsize, 3, 640, 640),
-                      opt=(opt_batchsize, 3, 640, 640),
-                      max=(max_batchsize, 3, 640, 640))
-    profile.set_shape("orig_target_sizes", min=(1, 2), opt=(1, 2), max=(1, 2))
+                      min=(min_batchsize, 3, input_hw[0], input_hw[1]),
+                      opt=(opt_batchsize, 3, input_hw[0], input_hw[1]),
+                      max=(max_batchsize, 3, input_hw[0], input_hw[1]))
+    profile.set_shape("orig_target_sizes",
+                      min=(min_batchsize, 2),
+                      opt=(opt_batchsize, 2),
+                      max=(max_batchsize, 2))
     config.add_optimization_profile(profile)
 
     print("[INFO] Building TensorRT engine...")
@@ -74,6 +120,7 @@ def main(onnx_path,
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert ONNX to TensorRT Engine")
     parser.add_argument("--onnx", "-i", type=str, required=True, help="Path to input ONNX model file")
+    parser.add_argument("--inputSize", "-s", type=int, default=None, help="Override network input size if ONNX does not store it")
     parser.add_argument("--saveEngine", "-o", type=str, default="model.engine", help="Path to output TensorRT engine file")
     parser.add_argument("--maxBatchSize", "-Mb", type=int, default=32, help="Maximum batch size for inference")
     parser.add_argument("--optBatchSize", "-ob", type=int, default=16, help="Optimal batch size for inference")
@@ -89,6 +136,7 @@ if __name__ == "__main__":
         max_batchsize=args.maxBatchSize,
         opt_batchsize=args.optBatchSize,
         min_batchsize=args.minBatchSize,
+        input_size=args.inputSize,
         use_fp16=args.fp16,
         verbose=args.verbose
     )

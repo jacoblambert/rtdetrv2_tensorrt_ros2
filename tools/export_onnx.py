@@ -42,10 +42,22 @@ def main(args, ):
             return outputs
 
     model = Model()
+    model.eval()
 
-    data = torch.rand(1, 3, args.input_size, args.input_size)
-    size = torch.tensor([[args.input_size, args.input_size]])
-    _ = model(data, size)
+    if args.input_size is not None:
+        input_hw = (int(args.input_size), int(args.input_size))
+    else:
+        eval_spatial_size = cfg.global_cfg.get('eval_spatial_size')
+        if isinstance(eval_spatial_size, (list, tuple)) and len(eval_spatial_size) == 2:
+            input_hw = (int(eval_spatial_size[0]), int(eval_spatial_size[1]))
+        else:
+            input_hw = (640, 640)
+            print('eval_spatial_size not found in config, fallback to 640x640...')
+
+    data = torch.rand(1, 3, input_hw[0], input_hw[1])
+    size = torch.tensor([input_hw], dtype=torch.float32)
+    with torch.no_grad():
+        _ = model(data, size)
 
     dynamic_axes = {
         'images': {0: 'N', },
@@ -87,7 +99,7 @@ if __name__ == '__main__':
     parser.add_argument('--config', '-c', type=str, )
     parser.add_argument('--resume', '-r', type=str, )
     parser.add_argument('--output_file', '-o', type=str, default='model.onnx')
-    parser.add_argument('--input_size', '-s', type=int, default=640)
+    parser.add_argument('--input_size', '-s', type=int, default=None)
     parser.add_argument('--check',  action='store_true', default=False,)
     parser.add_argument('--simplify',  action='store_true', default=False,)
     

@@ -19,11 +19,28 @@ find_package(TensorRT REQUIRED)
 find_package(tier4_perception_msgs REQUIRED)
 find_package(autoware_perception_msgs REQUIRED)
 
-include_directories(include)
-
 add_executable(trt_engine_info src/trt_engine_info.cpp)
 target_include_directories(trt_engine_info PRIVATE ${TensorRT_INCLUDE_DIRS})
 target_link_libraries(trt_engine_info PRIVATE ${TensorRT_LIBRARIES} CUDA::cudart)
+
+add_library(rtdetrv2_tensorrt_engine SHARED
+  src/trt_rtdetrv2_engine.cpp)
+target_include_directories(
+  rtdetrv2_tensorrt_engine
+  PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+
+target_include_directories(
+  rtdetrv2_tensorrt_engine
+  PRIVATE
+  ${TensorRT_INCLUDE_DIRS})
+
+target_link_libraries(
+  rtdetrv2_tensorrt_engine
+  PUBLIC
+  ${TensorRT_LIBRARIES}
+  CUDA::cudart)
 
 add_library(rtdetrv2_tensorrt_node SHARED
   src/rtdetrv2_tensorrt_node.cpp
@@ -51,9 +68,9 @@ ament_target_dependencies(
   
 target_link_libraries(
   rtdetrv2_tensorrt_node
-  ${TensorRT_LIBRARIES}
-  CUDA::cudart
-  ${OpenCV_LIBRARIES})
+  rtdetrv2_tensorrt_engine
+  ${OpenCV_LIBRARIES}
+  CUDA::cudart)
 
 rclcpp_components_register_node(
   rtdetrv2_tensorrt_node
@@ -63,6 +80,7 @@ rclcpp_components_register_node(
 install(
   TARGETS
   trt_engine_info
+  rtdetrv2_tensorrt_engine
   rtdetrv2_tensorrt_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
@@ -72,6 +90,15 @@ install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 
 ament_export_include_directories(include)
-ament_export_dependencies(rclcpp rclcpp_components sensor_msgs std_msgs tier4_perception_msgs autoware_perception_msgs)
+ament_export_dependencies(
+  rclcpp
+  rclcpp_components
+  sensor_msgs
+  std_msgs
+  tier4_perception_msgs
+  autoware_perception_msgs
+  OpenCV
+  TensorRT
+  CUDAToolkit)
 
 ament_package()

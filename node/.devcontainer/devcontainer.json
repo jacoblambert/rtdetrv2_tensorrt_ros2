@@ -25,6 +25,8 @@
     "XDG_RUNTIME_DIR=/run/user/1000",
     "--env",
     "NVIDIA_DRIVER_CAPABILITIES=all",
+    "--env",
+    "ROS_DOMAIN_ID=71",
     "--cap-add=SYS_PTRACE",
     "--security-opt",
     "seccomp=unconfined",

@@ -1,11 +1,7 @@
 #include "rtdetrv2_tensorrt_node/rtdetrv2_tensorrt_node.hpp"
 
-#include <NvInferRuntime.h>
-#include <NvInferRuntimeCommon.h>
-#include <NvInferVersion.h>
 #include <cuda_runtime_api.h>
 
-#include <opencv2/dnn.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
@@ -15,9 +11,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
-#include <fstream>
-#include <memory>
+#include <cstdio>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -26,120 +21,6 @@
 namespace
 {
 
-class TensorRtLogger : public nvinfer1::ILogger
-{
-public:
-  void log(Severity severity, const char * msg) noexcept override
-  {
-    if (severity > severity_threshold_) {
-      return;
-    }
-    switch (severity) {
-      case Severity::kINTERNAL_ERROR:
-      case Severity::kERROR:
-        RCLCPP_ERROR(rclcpp::get_logger("TensorRtLogger"), "%s", msg);
-        break;
-      case Severity::kWARNING:
-        RCLCPP_WARN(rclcpp::get_logger("TensorRtLogger"), "%s", msg);
-        break;
-      default:
-        RCLCPP_INFO(rclcpp::get_logger("TensorRtLogger"), "%s", msg);
-        break;
-    }
-  }
-
-  void setSeverityThreshold(Severity severity) { severity_threshold_ = severity; }
-
-private:
-  Severity severity_threshold_{Severity::kERROR};
-};
-
-template <typename T>
-struct TrtDeleter
-{
-  void operator()(T * ptr) const noexcept
-  {
-    if (ptr != nullptr) {
-      delete ptr;
-    }
-  }
-};
-
-template <typename T>
-using TrtUniquePtr = std::unique_ptr<T, TrtDeleter<T>>;
-
-inline std::size_t elementSize(nvinfer1::DataType type)
-{
-  switch (type) {
-    case nvinfer1::DataType::kFLOAT:
-      return 4;
-    case nvinfer1::DataType::kHALF:
-      return 2;
-    case nvinfer1::DataType::kINT8:
-      return 1;
-    case nvinfer1::DataType::kINT32:
-      return 4;
-    case nvinfer1::DataType::kBOOL:
-      return 1;
-    case nvinfer1::DataType::kUINT8:
-      return 1;
-    case nvinfer1::DataType::kINT64:
-      return 8;
-    case nvinfer1::DataType::kFP8:
-      return 1;
-    case nvinfer1::DataType::kBF16:
-      return 2;
-    case nvinfer1::DataType::kINT4:
-      return 1;
-    case nvinfer1::DataType::kFP4:
-      return 1;
-    default:
-      throw std::runtime_error("Unsupported TensorRT data type encountered.");
-  }
-}
-
-inline std::size_t tensorVolume(const nvinfer1::Dims & dims)
-{
-  if (dims.nbDims <= 0) {
-    return 0;
-  }
-  std::size_t volume = 1;
-  for (int i = 0; i < dims.nbDims; ++i) {
-    const int64_t dim = dims.d[i];
-    if (dim < 0) {
-      return 0;
-    }
-    volume *= static_cast<std::size_t>(dim);
-  }
-  return volume;
-}
-
-inline bool hasDynamicDimension(const nvinfer1::Dims & dims)
-{
-  for (int i = 0; i < dims.nbDims; ++i) {
-    if (dims.d[i] < 0) {
-      return true;
-    }
-  }
-  return false;
-}
-
-inline nvinfer1::Dims resolveInputDims(const std::string & tensor_name, const nvinfer1::Dims & dims)
-{
-  nvinfer1::Dims resolved = dims;
-  for (int i = 0; i < resolved.nbDims; ++i) {
-    if (resolved.d[i] < 0) {
-      if (i == 0) {
-        resolved.d[i] = 1;
-      } else {
-        throw std::runtime_error(
-          "Dynamic dimension detected in tensor '" + tensor_name +
-          "'. Only the batch dimension is supported.");
-      }
-    }
-  }
-  return resolved;
-}
 
 inline void cudaCheck(const cudaError_t error, const char * context)
 {
@@ -164,318 +45,9 @@ inline double bytesToMiB(std::size_t bytes)
 namespace rtdetrv2_tensorrt
 {
 
-class TrtRtdetrv2Engine
-{
-public:
-  struct InferenceResult
-  {
-    std::vector<float> boxes;
-    std::vector<float> scores;
-    std::vector<int64_t> labels;
-  };
-
-  explicit TrtRtdetrv2Engine(const std::string & engine_path);
-  ~TrtRtdetrv2Engine();
-
-  TrtRtdetrv2Engine(const TrtRtdetrv2Engine &) = delete;
-  TrtRtdetrv2Engine & operator=(const TrtRtdetrv2Engine &) = delete;
-
-  bool infer(
-    const std::vector<float> & image_tensor, const std::array<int64_t, 2> & orig_size,
-    InferenceResult & out_result);
-
-  int inputWidth() const noexcept { return input_width_; }
-  int inputHeight() const noexcept { return input_height_; }
-
-private:
-  struct TensorBinding
-  {
-    std::string name;
-    nvinfer1::Dims dims{};
-    nvinfer1::DataType dtype{nvinfer1::DataType::kFLOAT};
-    std::size_t bytes{0};
-    void * device_ptr{nullptr};
-    bool is_input{false};
-  };
-
-  void loadEngine(const std::string & engine_path);
-  void allocateBindings();
-  void releaseBindings();
-
-  TensorRtLogger logger_;
-  TrtUniquePtr<nvinfer1::IRuntime> runtime_;
-  TrtUniquePtr<nvinfer1::ICudaEngine> engine_;
-  TrtUniquePtr<nvinfer1::IExecutionContext> context_;
-
-  std::vector<TensorBinding> bindings_;
-  TensorBinding* images_binding_{nullptr};
-  TensorBinding* orig_sizes_binding_{nullptr};
-  TensorBinding* boxes_binding_{nullptr};
-  TensorBinding* scores_binding_{nullptr};
-  TensorBinding* labels_binding_{nullptr};
-
-  cudaStream_t stream_{nullptr};
-
-  int input_width_{640};
-  int input_height_{640};
-};
-
-TrtRtdetrv2Engine::TrtRtdetrv2Engine(const std::string & engine_path)
-{
-  if (engine_path.empty()) {
-    throw std::invalid_argument("Engine path is empty.");
-  }
-  loadEngine(engine_path);
-  allocateBindings();
-}
-
-TrtRtdetrv2Engine::~TrtRtdetrv2Engine()
-{
-  try {
-    releaseBindings();
-  } catch (const std::exception & e) {
-    RCLCPP_ERROR(
-      rclcpp::get_logger("TrtRtdetrv2Engine"), "Failed to release TensorRT buffers: %s",
-      e.what());
-  }
-}
-
-bool TrtRtdetrv2Engine::infer(
-  const std::vector<float> & image_tensor, const std::array<int64_t, 2> & orig_size,
-  InferenceResult & out_result)
-{
-  if (!images_binding_ || !orig_sizes_binding_ || !boxes_binding_ || !scores_binding_ ||
-      !labels_binding_) {
-    RCLCPP_ERROR(
-      rclcpp::get_logger("TrtRtdetrv2Engine"),
-      "Engine bindings are not initialized. Did allocation succeed?");
-    return false;
-  }
-
-  const std::size_t expected_image_bytes = images_binding_->bytes;
-  if (image_tensor.size() * sizeof(float) != expected_image_bytes) {
-    RCLCPP_ERROR(
-      rclcpp::get_logger("TrtRtdetrv2Engine"),
-      "Input tensor size mismatch. Expected %zu floats, received %zu floats.",
-      expected_image_bytes / sizeof(float), image_tensor.size());
-    return false;
-  }
-
-  for (auto & binding : bindings_) {
-    if (binding.is_input) {
-      if (!context_->setInputShape(binding.name.c_str(), binding.dims)) {
-        RCLCPP_ERROR(
-          rclcpp::get_logger("TrtRtdetrv2Engine"),
-          "Failed to set input shape for tensor '%s'.", binding.name.c_str());
-        return false;
-      }
-    }
-    if (!context_->setTensorAddress(binding.name.c_str(), binding.device_ptr)) {
-      RCLCPP_ERROR(
-        rclcpp::get_logger("TrtRtdetrv2Engine"),
-        "Failed to set device address for tensor '%s'.", binding.name.c_str());
-      return false;
-    }
-  }
-
-  cudaCheck(
-    cudaMemcpyAsync(
-      images_binding_->device_ptr, image_tensor.data(), images_binding_->bytes,
-      cudaMemcpyHostToDevice, stream_),
-    "cudaMemcpyAsync(images)");
-
-  if (orig_sizes_binding_->bytes != sizeof(int64_t) * 2) {
-    RCLCPP_WARN_ONCE(
-      rclcpp::get_logger("TrtRtdetrv2Engine"),
-      "Expected orig_target_sizes tensor size of 2 int64 elements, got %zu bytes.",
-      orig_sizes_binding_->bytes);
-  }
-
-  cudaCheck(
-    cudaMemcpyAsync(
-      orig_sizes_binding_->device_ptr, orig_size.data(), orig_sizes_binding_->bytes,
-      cudaMemcpyHostToDevice, stream_),
-    "cudaMemcpyAsync(orig_target_sizes)");
-
-  if (!context_->enqueueV3(stream_)) {
-    RCLCPP_ERROR(rclcpp::get_logger("TrtRtdetrv2Engine"), "TensorRT execution failed.");
-    cudaCheck(cudaStreamSynchronize(stream_), "cudaStreamSynchronize after failure");
-    return false;
-  }
-
-  out_result.boxes.resize(boxes_binding_->bytes / sizeof(float));
-  out_result.scores.resize(scores_binding_->bytes / sizeof(float));
-  out_result.labels.resize(labels_binding_->bytes / sizeof(int64_t));
-
-  cudaCheck(
-    cudaMemcpyAsync(
-      out_result.boxes.data(), boxes_binding_->device_ptr, boxes_binding_->bytes,
-      cudaMemcpyDeviceToHost, stream_),
-    "cudaMemcpyAsync(boxes)");
-  cudaCheck(
-    cudaMemcpyAsync(
-      out_result.scores.data(), scores_binding_->device_ptr, scores_binding_->bytes,
-      cudaMemcpyDeviceToHost, stream_),
-    "cudaMemcpyAsync(scores)");
-  cudaCheck(
-    cudaMemcpyAsync(
-      out_result.labels.data(), labels_binding_->device_ptr, labels_binding_->bytes,
-      cudaMemcpyDeviceToHost, stream_),
-    "cudaMemcpyAsync(labels)");
-
-  cudaCheck(cudaStreamSynchronize(stream_), "cudaStreamSynchronize");
-  return true;
-}
-
-void TrtRtdetrv2Engine::loadEngine(const std::string & engine_path)
-{
-  std::ifstream engine_stream(engine_path, std::ios::binary);
-  if (!engine_stream.good()) {
-    throw std::runtime_error("Unable to open TensorRT engine file: " + engine_path);
-  }
-  engine_stream.seekg(0, std::ifstream::end);
-  const size_t size = static_cast<size_t>(engine_stream.tellg());
-  engine_stream.seekg(0, std::ifstream::beg);
-  std::vector<char> engine_data(size);
-  engine_stream.read(engine_data.data(), static_cast<std::streamsize>(size));
-  engine_stream.close();
-
-  runtime_ = TrtUniquePtr<nvinfer1::IRuntime>(nvinfer1::createInferRuntime(logger_));
-  if (!runtime_) {
-    throw std::runtime_error("Failed to create TensorRT runtime.");
-  }
-
-  engine_ = TrtUniquePtr<nvinfer1::ICudaEngine>(
-    runtime_->deserializeCudaEngine(engine_data.data(), size));
-  if (!engine_) {
-    throw std::runtime_error("Failed to deserialize TensorRT engine.");
-  }
-
-  context_ = TrtUniquePtr<nvinfer1::IExecutionContext>(engine_->createExecutionContext());
-  if (!context_) {
-    throw std::runtime_error("Failed to create TensorRT execution context.");
-  }
-}
-
-void TrtRtdetrv2Engine::allocateBindings()
-{
-  const int32_t tensor_count = engine_->getNbIOTensors();
-  if (tensor_count <= 0) {
-    throw std::runtime_error("TensorRT engine reports zero I/O tensors.");
-  }
-
-  bindings_.clear();
-  bindings_.reserve(static_cast<std::size_t>(tensor_count));
-
-  for (int32_t i = 0; i < tensor_count; ++i) {
-    const char * name = engine_->getIOTensorName(i);
-    const bool is_input = engine_->getTensorIOMode(name) == nvinfer1::TensorIOMode::kINPUT;
-    if (!is_input) {
-      continue;
-    }
-    nvinfer1::Dims dims = engine_->getTensorShape(name);
-    if (hasDynamicDimension(dims)) {
-      dims = resolveInputDims(name, dims);
-    }
-    if (!context_->setInputShape(name, dims)) {
-      throw std::runtime_error("Failed to set input shape for tensor '" + std::string(name) + "'.");
-    }
-  }
-
-  for (int32_t i = 0; i < tensor_count; ++i) {
-    const char * name_cstr = engine_->getIOTensorName(i);
-    std::string name(name_cstr);
-    const bool is_input = engine_->getTensorIOMode(name_cstr) == nvinfer1::TensorIOMode::kINPUT;
-
-    nvinfer1::Dims dims = context_->getTensorShape(name_cstr);
-    if (tensorVolume(dims) == 0) {
-      if (is_input) {
-        nvinfer1::Dims resolved = resolveInputDims(name, engine_->getTensorShape(name_cstr));
-        if (!context_->setInputShape(name_cstr, resolved)) {
-          throw std::runtime_error(
-            "Failed to resolve final shape for tensor '" + name + "'.");
-        }
-        dims = context_->getTensorShape(name_cstr);
-      }
-      if (tensorVolume(dims) == 0) {
-        throw std::runtime_error(
-          "Tensor '" + name + "' has unresolved dynamic dimensions after setup.");
-      }
-    }
-
-    const nvinfer1::DataType dtype = engine_->getTensorDataType(name_cstr);
-    const std::size_t bytes = tensorVolume(dims) * elementSize(dtype);
-    if (bytes == 0) {
-      throw std::runtime_error("Computed zero-sized buffer for tensor '" + name + "'.");
-    }
-
-    TensorBinding binding;
-    binding.name = name;
-    binding.dims = dims;
-    binding.dtype = dtype;
-    binding.bytes = bytes;
-    binding.is_input = is_input;
-
-    std::string malloc_context = "cudaMalloc(" + name + ")";
-    cudaCheck(cudaMalloc(&binding.device_ptr, binding.bytes), malloc_context.c_str());
-
-    if (!context_->setTensorAddress(name_cstr, binding.device_ptr)) {
-      throw std::runtime_error("Failed to set tensor address for '" + name + "'.");
-    }
-
-    bindings_.push_back(binding);
-    TensorBinding & stored = bindings_.back();
-
-    if (stored.name == "images") {
-      if (stored.dims.nbDims < 4) {
-        throw std::runtime_error("Unexpected dimension count for 'images' tensor.");
-      }
-      input_height_ = static_cast<int>(stored.dims.d[2]);
-      input_width_ = static_cast<int>(stored.dims.d[3]);
-      images_binding_ = &stored;
-    } else if (stored.name == "orig_target_sizes") {
-      orig_sizes_binding_ = &stored;
-    } else if (stored.name == "boxes") {
-      boxes_binding_ = &stored;
-    } else if (stored.name == "scores") {
-      scores_binding_ = &stored;
-    } else if (stored.name == "labels") {
-      labels_binding_ = &stored;
-    }
-  }
-
-  if (!images_binding_ || !orig_sizes_binding_ || !boxes_binding_ || !scores_binding_ ||
-      !labels_binding_) {
-    throw std::runtime_error("Expected TensorRT engine inputs/outputs were not found.");
-  }
-
-  cudaCheck(cudaStreamCreate(&stream_), "cudaStreamCreate");
-}
-
-void TrtRtdetrv2Engine::releaseBindings()
-{
-  for (auto & binding : bindings_) {
-    if (binding.device_ptr != nullptr) {
-      cudaCheck(cudaFree(binding.device_ptr), "cudaFree");
-      binding.device_ptr = nullptr;
-    }
-  }
-  bindings_.clear();
-
-  if (stream_ != nullptr) {
-    cudaCheck(cudaStreamDestroy(stream_), "cudaStreamDestroy");
-    stream_ = nullptr;
-  }
-}
 
 namespace
 {
-
-std::vector<std::string> defaultClasses()
-{
-  return {
-    "car", "truck", "bus", "trailer", "motorcycle", "bicycle", "pedestrian", "animal"};
-}
 
 std::string makeLabelText(
   const std::vector<std::string> & classes, int label_idx, double score, bool draw_class,
@@ -539,10 +111,9 @@ Rtdetrv2TensorRtNode::Rtdetrv2TensorRtNode(const rclcpp::NodeOptions & options)
     throw std::runtime_error("Failed to load label map '" + label_map_name + "'.");
   }
 
-  engine_ = std::make_unique<TrtRtdetrv2Engine>(engine_path);
-  input_width_ = engine_->inputWidth();
-  input_height_ = engine_->inputHeight();
-  input_buffer_.resize(static_cast<std::size_t>(3 * input_height_ * input_width_));
+  requested_input_size_ = loadRequestedInputSize();
+  engine_ = std::make_unique<TrtRtdetrv2Engine>(engine_path, requested_input_size_);
+  updateInputGeometryFromEngine();
 
   if (warmup_iterations > 0) {
     const auto warmup_start = std::chrono::steady_clock::now();
@@ -589,6 +160,7 @@ Rtdetrv2TensorRtNode::Rtdetrv2TensorRtNode(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(this->get_logger(), "  Input image: %s", input_topic.c_str());
   RCLCPP_INFO(this->get_logger(), "  Objects: %s", objects_topic.c_str());
   RCLCPP_INFO(this->get_logger(), "  Label map: %s", label_map_name.c_str());
+  RCLCPP_INFO(this->get_logger(), "  Input size: %dx%d", input_width_, input_height_);
   RCLCPP_INFO(
     this->get_logger(), "  Performance logging: %s", performance_logging_ ? "ON" : "OFF");
   RCLCPP_INFO(
@@ -726,26 +298,51 @@ bool Rtdetrv2TensorRtNode::prepareInputTensor(
 {
   orig_size = {image.cols, image.rows};
 
-  const std::size_t expected_tensor_size =
-    static_cast<std::size_t>(3 * input_height_) * static_cast<std::size_t>(input_width_);
+  const int target_width = input_width_;
+  const int target_height = input_height_;
+  if (target_width <= 0 || target_height <= 0) {
+    RCLCPP_ERROR(this->get_logger(), "Invalid target input size %dx%d.", target_width, target_height);
+    return false;
+  }
+
+  const bool needs_resize = (image.cols != target_width) || (image.rows != target_height);
+  const cv::Mat * processed = &image;
+  if (needs_resize) {
+    cv::resize(image, resize_buffer_, cv::Size(target_width, target_height), 0.0, 0.0, cv::INTER_LINEAR);
+    processed = &resize_buffer_;
+  }
+
+  const cv::Mat & bgr = *processed;
+  if (bgr.empty()) {
+    RCLCPP_ERROR(this->get_logger(), "Resized image is empty.");
+    return false;
+  }
+  if (bgr.type() != CV_8UC3) {
+    RCLCPP_WARN_ONCE(this->get_logger(), "Unexpected image type %d. Expected CV_8UC3.", bgr.type());
+  }
+
+  const std::size_t channel_size = static_cast<std::size_t>(target_width) * target_height;
+  const std::size_t expected_tensor_size = channel_size * 3U;
   if (input_buffer_.size() != expected_tensor_size) {
     input_buffer_.resize(expected_tensor_size);
   }
 
-  cv::dnn::blobFromImage(
-    image, blob_buffer_, 1.0 / 255.0, cv::Size(input_width_, input_height_), cv::Scalar(),
-    true, false, CV_32F);
+  float * dst_r = input_buffer_.data();
+  float * dst_g = dst_r + channel_size;
+  float * dst_b = dst_g + channel_size;
+  constexpr float inv_255 = 1.0F / 255.0F;
 
-  const std::size_t blob_elements = static_cast<std::size_t>(blob_buffer_.total());
-  if (blob_elements != expected_tensor_size) {
-    RCLCPP_ERROR(
-      this->get_logger(),
-      "Unexpected blob size during preprocessing. Expected %zu floats, got %zu floats.",
-      expected_tensor_size, blob_elements);
-    return false;
+  for (int y = 0; y < target_height; ++y) {
+    const cv::Vec3b * row = bgr.ptr<cv::Vec3b>(y);
+    const std::size_t row_offset = static_cast<std::size_t>(y) * static_cast<std::size_t>(target_width);
+    for (int x = 0; x < target_width; ++x) {
+      const cv::Vec3b & pixel = row[x];
+      const std::size_t idx = row_offset + static_cast<std::size_t>(x);
+      dst_r[idx] = static_cast<float>(pixel[2]) * inv_255;
+      dst_g[idx] = static_cast<float>(pixel[1]) * inv_255;
+      dst_b[idx] = static_cast<float>(pixel[0]) * inv_255;
+    }
   }
-
-  std::memcpy(input_buffer_.data(), blob_buffer_.ptr<float>(), expected_tensor_size * sizeof(float));
   return true;
 }
 
@@ -855,6 +452,58 @@ void Rtdetrv2TensorRtNode::annotateDetections(
       image, label_text, cv::Point(text_origin.x, text_origin.y + 2), font_face, font_scale,
       cv::Scalar(255, 255, 255), thickness, cv::LINE_AA);
   }
+}
+
+std::optional<TrtRtdetrv2Engine::InputSize> Rtdetrv2TensorRtNode::loadRequestedInputSize()
+{
+  const int param_width = this->declare_parameter<int>("input_width", 0);
+  const int param_height = this->declare_parameter<int>("input_height", 0);
+
+  if (param_width <= 0 && param_height <= 0) {
+    return std::nullopt;
+  }
+  if (param_width <= 0 || param_height <= 0) {
+    throw std::runtime_error(
+      "Parameters 'input_width' and 'input_height' must both be positive when provided.");
+  }
+
+  return TrtRtdetrv2Engine::InputSize{param_width, param_height};
+}
+
+void Rtdetrv2TensorRtNode::updateInputGeometryFromEngine()
+{
+  if (!engine_) {
+    throw std::runtime_error("TensorRT engine not initialized when updating input geometry.");
+  }
+
+  const int width = engine_->inputWidth();
+  const int height = engine_->inputHeight();
+  if (width <= 0 || height <= 0) {
+    throw std::runtime_error("TensorRT engine reported invalid input dimensions.");
+  }
+
+  if (requested_input_size_) {
+    if (requested_input_size_->width != width || requested_input_size_->height != height) {
+      RCLCPP_WARN(
+        this->get_logger(),
+        "Requested input size %dx%d differs from engine dimensions %dx%d. Using engine output.",
+        requested_input_size_->width, requested_input_size_->height, width, height);
+    }
+  } else if (!engine_->isInputShapeStatic()) {
+    RCLCPP_INFO(
+      this->get_logger(),
+      "TensorRT engine uses dynamic shapes; resolved to %dx%d for the current profile.",
+      width, height);
+  }
+
+  input_width_ = width;
+  input_height_ = height;
+
+  const std::size_t tensor_size = static_cast<std::size_t>(3 * input_height_) * input_width_;
+  if (input_buffer_.size() != tensor_size) {
+    input_buffer_.resize(tensor_size);
+  }
+  resize_buffer_.create(input_height_, input_width_, CV_8UC3);
 }
 
 bool Rtdetrv2TensorRtNode::encodeAndPublish(const cv::Mat & image, const std_msgs::msg::Header & header)

@@ -1,10 +1,13 @@
 // train
+python tools/train.py -c configs/rtdetrv2/rtdetrv2_r101vd_6x_960_autoware.yml -t checkpoints/rtdetrv2_XL_r101vd_6x_coco_from_paddle.pth
+python tools/train.py -c configs/rtdetrv2/rtdetrv2_r101vd_6x_960_autoware.yml -r work_dirs/rtdetrv2_r101vd_6x_autoware_960/last.pth
 
 // test
-python tools/train.py -c configs/rtdetrv2/rtdetrv2_r18vd_120e_100q_autoware.yml -r work_dirs/rtdetrv2_r18vd_120e_100q_autoware/best.pth --test-only
+python tools/train.py -c configs/rtdetrv2/rtdetrv2_r101vd_6x_960_autoware.yml -t checkpoints/rtdetrv2_XL_r101vd_6x_coco_from_paddle.pth --test-only
 
 // export to onnx
-ython tools/export_onnx.py -c configs/rtdetrv2/rtdetrv2_r18vd_120e_100q_autoware.yml -r /work_dirs/rtdetrv2_r18vd_120e_100q_autoware/checkpoint0038.pth -o checkpoints/onnx/rtdetrv2_r18vd_120e_100q_autoware.onnx --check
+python tools/export_onnx.py -c /workspace/configs/rtdetrv2/rtdetrv2_r101vd_6x_960_autoware.yml -r work_dirs/rtdetrv2_r101vd_6x_autoware_960/best.pth -o checkpoints/onnx/rtdetrv2_r101vd_6x_autoware_960.onnx --input_size 960 --check
 
 // export to trt
 python tools/export_trt.py -i checkpoints/onnx/rtdetrv2_r18vd_120e_100q_autoware.onnx -o checkpoints/trt/rtdetrv2_r18vd_120e_100q_autoware.engine
+python tools/export_trt.py -i checkpoints/onnx/rtdetrv2_r101vd_6x_bdd100k_960.onnx -o checkpoints/trt/rtdetrv2_r101vd_6x_bdd100k_960.engine
