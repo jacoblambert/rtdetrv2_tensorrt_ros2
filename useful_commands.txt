@@ -1,4 +1,8 @@
-// train
+// train from scratch
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --master_port=9909 --nproc_per_node=4 tools/train.py -c path/to/config -t base_model.pth --use-amp --seed=0
+
+// resume training 
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --master_port=9909 --nproc_per_node=4 tools/train.py -c configs/rtdetrv2/rtdetrv2_r101vd_6x_960_bdd100k.yml -r work_dirs/rtdetrv2_r101vd_6x_bdd100k/last.pth --use-amp --seed=0
 
 // test
 python tools/train.py -c configs/rtdetrv2/rtdetrv2_r18vd_120e_100q_autoware.yml -r work_dirs/rtdetrv2_r18vd_120e_100q_autoware/best.pth --test-only

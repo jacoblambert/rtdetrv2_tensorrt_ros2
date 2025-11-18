@@ -33,7 +33,7 @@
     "--volume=/tmp/.X11-unix/:/tmp/.X11-unix",
     "--volume=/etc/localtime:/etc/localtime:ro",
     "--volume=/dev/dri:/dev/dri:ro",
-    "--volume=/home/jacoblambert/public_data/mapillary_vistas:/data/:ro",
+    "--volume=/mnt/qnapdata/external/bdd100k:/data/:ro",
     "--gpus",
     "all",
     "--shm-size=64gb",

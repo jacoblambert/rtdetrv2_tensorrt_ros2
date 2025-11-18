@@ -175,3 +175,4 @@ work_dirs/
 output/
 checkpoints/
 .vscode
+data/
